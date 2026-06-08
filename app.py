@@ -1,4 +1,3 @@
-
 """
 app.py - Step 4: the Streamlit dashboard.
  
@@ -62,11 +61,14 @@ def load_data(path: str = DATA_PATH) -> pd.DataFrame:
     for col in ["country", "sector", "event_type", "environmental_issue",
                 "severity", "urgency", "article_title", "article_url",
                 "source", "llm_summary", "source_text_excerpt", "latitude",
-                "longitude", "date_published", "geocode_precision"]:
+                "longitude", "date_published", "geocode_precision",
+                "conflict_id", "coverage_count"]:
         if col not in df.columns:
             df[col] = ""
  
     df["date"] = pd.to_datetime(df["date_published"], errors="coerce")
+    # coverage_count is written by conflict_ids.py; default to 1 if absent.
+    df["coverage"] = pd.to_numeric(df["coverage_count"], errors="coerce").fillna(1).astype(int)
     df["lat"] = pd.to_numeric(df["latitude"], errors="coerce")
     df["lon"] = pd.to_numeric(df["longitude"], errors="coerce")
     df["theme"] = df["sector"].where(df["sector"].str.strip() != "",
@@ -138,12 +140,16 @@ def build_map(df: pd.DataFrame):
         summary = (r["summary_display"] or "")[:300]
         url = r["article_url"]
         date_str = r["date"].date().isoformat() if pd.notna(r["date"]) else "unknown date"
+        cov = int(r["coverage"]) if pd.notna(r["coverage"]) else 1
+        cov_line = (f"<br><b>Reported by {cov} articles</b>"
+                    if cov > 1 else "")
         popup_html = (
             f"<b>{_esc(title)}</b><br>"
             f"<small>{_esc(r['source'])} &middot; {date_str} &middot; "
             f"{_esc(r['country'])}</small><br>"
             f"<i>{_esc(r['sector'])} / {_esc(r['event_type'])}"
             f"{(' / severity: ' + _esc(r['severity'])) if r['severity'] else ''}</i>"
+            f"{cov_line}"
             f"<p>{_esc(summary)}</p>"
             f"<a href='{_esc(url)}' target='_blank'>Read source &rarr;</a>"
         )
@@ -212,15 +218,16 @@ def main() -> None:
     fdf = apply_filters(df, countries, sectors, events, date_range, query)
  
     # ---- Headline metrics ----
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Conflicts shown", len(fdf))
-    c2.metric("Countries", fdf["country"].replace("", pd.NA).nunique())
-    c3.metric("With coordinates", int(fdf[["lat", "lon"]].notna().all(axis=1).sum()))
+    c1, c2, c3, c4, c5 = st.columns(5)
+    c1.metric("Articles shown", len(fdf))
+    c2.metric("Unique conflicts", fdf["conflict_id"].replace("", pd.NA).nunique())
+    c3.metric("Countries", fdf["country"].replace("", pd.NA).nunique())
+    c4.metric("With coordinates", int(fdf[["lat", "lon"]].notna().all(axis=1).sum()))
     if not fdf.dropna(subset=["date"]).empty:
         dd = fdf.dropna(subset=["date"])
-        c4.metric("Date span", f"{dd['date'].min().date()} -> {dd['date'].max().date()}")
+        c5.metric("Date span", f"{dd['date'].min().date()} -> {dd['date'].max().date()}")
     else:
-        c4.metric("Date span", "n/a")
+        c5.metric("Date span", "n/a")
  
     # ---- Download button (exports whatever the user has currently filtered) ----
     csv_bytes = fdf.to_csv(index=False).encode("utf-8")
@@ -257,9 +264,10 @@ def main() -> None:
  
     # ---- Table ----
     st.subheader("Articles")
-    table_cols = ["date_published", "source", "country", "region_department",
-                  "sector", "event_type", "environmental_issue", "severity",
-                  "urgency", "article_title", "article_url"]
+    table_cols = ["conflict_id", "coverage_count", "date_published", "source",
+                  "country", "region_department", "sector", "event_type",
+                  "environmental_issue", "severity", "urgency",
+                  "article_title", "article_url"]
     table_cols = [c for c in table_cols if c in fdf.columns]
     st.dataframe(
         fdf[table_cols].sort_values("date_published", ascending=False),
